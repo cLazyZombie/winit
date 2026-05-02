@@ -21,8 +21,8 @@ use crate::event_loop::{self, ActiveEventLoop as RootAEL, ControlFlow, DeviceEve
 use crate::platform::pump_events::PumpStatus;
 use crate::platform_impl::Fullscreen;
 use crate::window::{
-    self, CursorGrabMode, CustomCursor, CustomCursorSource, ImePurpose, ResizeDirection, Theme,
-    WindowButtons, WindowLevel,
+    self, CursorGrabMode, CustomCursor, CustomCursorSource, ImePurpose, ImeSurroundingText,
+    ResizeDirection, Theme, WindowButtons, WindowLevel,
 };
 
 mod keycodes;
@@ -914,6 +914,8 @@ impl Window {
     pub fn set_window_icon(&self, _window_icon: Option<crate::icon::Icon>) {}
 
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {}
+
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {}
 
     pub fn set_ime_allowed(&self, allowed: bool) {
         if allowed {

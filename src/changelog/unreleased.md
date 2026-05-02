@@ -39,3 +39,12 @@ The migration guide could reference other migration examples in the current
 changelog entry.
 
 ## Unreleased
+
+### Added
+
+- Add `Window::set_ime_surrounding_text` and `Ime::DeleteSurrounding`, implemented on macOS.
+
+### Fixed
+
+- On macOS, fix Korean IME composition producing decomposed Hangul syllables when surrounding text
+  is provided.

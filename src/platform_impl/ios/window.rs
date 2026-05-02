@@ -27,8 +27,8 @@ use crate::platform_impl::platform::{
     app_state, monitor, ActiveEventLoop, Fullscreen, MonitorHandle,
 };
 use crate::window::{
-    CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType, WindowAttributes,
-    WindowButtons, WindowId as RootWindowId, WindowLevel,
+    CursorGrabMode, ImePurpose, ImeSurroundingText, ResizeDirection, Theme, UserAttentionType,
+    WindowAttributes, WindowButtons, WindowId as RootWindowId, WindowLevel,
 };
 
 declare_class!(
@@ -365,6 +365,10 @@ impl Inner {
 
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {
         warn!("`Window::set_ime_cursor_area` is ignored on iOS")
+    }
+
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {
+        warn!("`Window::set_ime_surrounding_text` is ignored on iOS")
     }
 
     /// Show / hide the keyboard. To show the keyboard, we call `becomeFirstResponder`,

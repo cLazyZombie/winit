@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::cursor::Cursor;
 use crate::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use crate::platform_impl::Fullscreen;
-use crate::window::ImePurpose;
+use crate::window::{ImePurpose, ImeSurroundingText};
 use crate::{error, window};
 
 use super::{
@@ -351,6 +351,9 @@ impl Window {
 
     #[inline]
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {}
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {}
 
     #[inline]
     pub fn set_ime_allowed(&self, _allowed: bool) {}

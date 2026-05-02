@@ -29,7 +29,8 @@ use crate::platform::pump_events::PumpStatus;
 use crate::platform::x11::{WindowType as XWindowType, XlibErrorHook};
 use crate::window::{
     ActivationToken, Cursor, CursorGrabMode, CustomCursor, CustomCursorSource, ImePurpose,
-    ResizeDirection, Theme, UserAttentionType, WindowAttributes, WindowButtons, WindowLevel,
+    ImeSurroundingText, ResizeDirection, Theme, UserAttentionType, WindowAttributes, WindowButtons,
+    WindowLevel,
 };
 
 pub(crate) use self::common::xkb::{physicalkey_to_scancode, scancode_to_physicalkey};
@@ -515,6 +516,11 @@ impl Window {
     #[inline]
     pub fn set_ime_cursor_area(&self, position: Position, size: Size) {
         x11_or_wayland!(match self; Window(w) => w.set_ime_cursor_area(position, size))
+    }
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, surrounding_text: ImeSurroundingText) {
+        x11_or_wayland!(match self; Window(w) => w.set_ime_surrounding_text(surrounding_text))
     }
 
     #[inline]

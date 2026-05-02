@@ -69,8 +69,8 @@ use crate::platform_impl::platform::window_state::{
 };
 use crate::platform_impl::platform::{util, Fullscreen, SelectedCursor, WindowId};
 use crate::window::{
-    CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType, WindowAttributes,
-    WindowButtons, WindowLevel,
+    CursorGrabMode, ImePurpose, ImeSurroundingText, ResizeDirection, Theme, UserAttentionType,
+    WindowAttributes, WindowButtons, WindowLevel,
 };
 
 /// The Win32 implementation of the main `Window` object.
@@ -917,6 +917,9 @@ impl Window {
             ImeContext::current(window).set_ime_cursor_area(spot, size, scale_factor);
         });
     }
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {}
 
     #[inline]
     pub fn set_ime_allowed(&self, allowed: bool) {

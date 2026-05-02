@@ -24,8 +24,8 @@ use crate::platform_impl::{
     Fullscreen, MonitorHandle as PlatformMonitorHandle, OsError, PlatformIcon,
 };
 use crate::window::{
-    Cursor, CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType,
-    WindowAttributes, WindowButtons, WindowLevel,
+    Cursor, CursorGrabMode, ImePurpose, ImeSurroundingText, ResizeDirection, Theme,
+    UserAttentionType, WindowAttributes, WindowButtons, WindowLevel,
 };
 
 use super::event_loop::sink::EventSink;
@@ -608,6 +608,9 @@ impl Window {
             window_state.set_ime_cursor_area(position, size);
         }
     }
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {}
 
     #[inline]
     pub fn set_ime_allowed(&self, allowed: bool) {

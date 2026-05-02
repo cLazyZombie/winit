@@ -27,8 +27,8 @@ use crate::platform_impl::{
     PlatformIcon, VideoModeHandle as PlatformVideoModeHandle,
 };
 use crate::window::{
-    CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType, WindowAttributes,
-    WindowButtons, WindowLevel,
+    CursorGrabMode, ImePurpose, ImeSurroundingText, ResizeDirection, Theme, UserAttentionType,
+    WindowAttributes, WindowButtons, WindowLevel,
 };
 
 use super::util::{self, SelectedCursor};
@@ -1740,6 +1740,9 @@ impl UnownedWindow {
             y,
         ));
     }
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {}
 
     #[inline]
     pub fn set_ime_allowed(&self, allowed: bool) {

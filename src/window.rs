@@ -1257,6 +1257,33 @@ impl Window {
         self.window.maybe_queue_on_main(move |w| w.set_ime_cursor_area(position, size))
     }
 
+    /// Set the text surrounding the IME cursor.
+    ///
+    /// Applications should update this whenever the text around the active input cursor changes.
+    /// Some input methods use this context to replace already inserted text with a newly composed
+    /// form. On macOS, Korean 2-Set uses this path when combining jamo into Hangul syllables.
+    ///
+    /// When winit emits [`Ime::DeleteSurrounding`], delete the requested bytes around the current
+    /// selection before applying the following [`Ime::Commit`].
+    ///
+    /// ## Platform-specific
+    ///
+    /// - **macOS:** Used by input methods that query surrounding text.
+    /// - **iOS / Android / Web / Windows / X11 / Wayland / Orbital:** Unsupported.
+    ///
+    /// [`Ime`]: crate::event::Ime
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, surrounding_text: ImeSurroundingText) {
+        let _span = tracing::debug_span!(
+            "winit::Window::set_ime_surrounding_text",
+            text_len = surrounding_text.text().len(),
+            cursor = surrounding_text.cursor(),
+            anchor = surrounding_text.anchor(),
+        )
+        .entered();
+        self.window.maybe_queue_on_main(move |w| w.set_ime_surrounding_text(surrounding_text))
+    }
+
     /// Sets whether the window should get IME events
     ///
     /// When IME is allowed, the window will receive [`Ime`] events, and during the
@@ -1838,6 +1865,87 @@ pub enum ImePurpose {
     Terminal,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub enum ImeSurroundingTextError {
+    /// Text exceeds 4000 bytes.
+    TextTooLong,
+    /// Cursor is not on a code point boundary, or is past the end of text.
+    CursorBadPosition,
+    /// Anchor is not on a code point boundary, or is past the end of text.
+    AnchorBadPosition,
+}
+
+impl fmt::Display for ImeSurroundingTextError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ImeSurroundingTextError::TextTooLong => write!(f, "text exceeds maximum length"),
+            ImeSurroundingTextError::CursorBadPosition => {
+                write!(f, "cursor is not at a valid text index")
+            },
+            ImeSurroundingTextError::AnchorBadPosition => {
+                write!(f, "anchor is not at a valid text index")
+            },
+        }
+    }
+}
+
+impl std::error::Error for ImeSurroundingTextError {}
+
+/// Text surrounding the IME cursor, excluding preedit text.
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImeSurroundingText {
+    text: String,
+    cursor: usize,
+    anchor: usize,
+}
+
+impl ImeSurroundingText {
+    /// Maximum text excerpt length accepted by winit.
+    pub const MAX_TEXT_BYTES: usize = 4000;
+
+    /// Define the text surrounding the cursor and the selection within it.
+    ///
+    /// `cursor` and `anchor` are byte indices into `text`. With no selection, both indices should
+    /// be the same. The text must exclude active preedit text.
+    pub fn new(
+        text: String,
+        cursor: usize,
+        anchor: usize,
+    ) -> Result<Self, ImeSurroundingTextError> {
+        if text.len() > Self::MAX_TEXT_BYTES {
+            return Err(ImeSurroundingTextError::TextTooLong);
+        }
+
+        if cursor > text.len() || !text.is_char_boundary(cursor) {
+            return Err(ImeSurroundingTextError::CursorBadPosition);
+        }
+
+        if anchor > text.len() || !text.is_char_boundary(anchor) {
+            return Err(ImeSurroundingTextError::AnchorBadPosition);
+        }
+
+        Ok(Self { text, cursor, anchor })
+    }
+
+    /// Consume the object and return only the surrounding text string.
+    pub fn into_text(self) -> String {
+        self.text
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn anchor(&self) -> usize {
+        self.anchor
+    }
+}
+
 /// An opaque token used to activate the [`Window`].
 ///
 /// [`Window`]: crate::window::Window
@@ -1872,5 +1980,35 @@ impl ActivationToken {
     /// Convert the token to its string representation to later pass via IPC.
     pub fn into_raw(self) -> String {
         self.token
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ImeSurroundingText, ImeSurroundingTextError};
+
+    #[test]
+    fn ime_surrounding_text_accepts_cursor_and_anchor_at_utf8_boundaries() {
+        let surrounding_text = ImeSurroundingText::new("a한b".into(), "a한".len(), 1).unwrap();
+
+        assert_eq!(surrounding_text.text(), "a한b");
+        assert_eq!(surrounding_text.cursor(), "a한".len());
+        assert_eq!(surrounding_text.anchor(), 1);
+    }
+
+    #[test]
+    fn ime_surrounding_text_rejects_cursor_inside_utf8_codepoint() {
+        assert_eq!(
+            ImeSurroundingText::new("한".into(), 1, 0),
+            Err(ImeSurroundingTextError::CursorBadPosition)
+        );
+    }
+
+    #[test]
+    fn ime_surrounding_text_rejects_anchor_inside_utf8_codepoint() {
+        assert_eq!(
+            ImeSurroundingText::new("한".into(), "한".len(), 1),
+            Err(ImeSurroundingTextError::AnchorBadPosition)
+        );
     }
 }

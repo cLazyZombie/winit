@@ -1,6 +1,7 @@
 #![allow(clippy::unnecessary_cast)]
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
+use std::ops::Range;
 use std::ptr;
 
 use objc2::rc::{Retained, WeakId};
@@ -31,6 +32,7 @@ use crate::event::{
 };
 use crate::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey};
 use crate::platform::macos::OptionAsAlt;
+use crate::window::ImeSurroundingText;
 
 #[derive(Debug)]
 struct CursorState {
@@ -59,6 +61,163 @@ enum ImeState {
 
     /// The text was just committed, so the next input from the keyboard must be ignored.
     Committed,
+}
+
+#[derive(Debug)]
+struct ImeTextState {
+    text: String,
+    cursor: usize,
+    anchor: usize,
+}
+
+impl ImeTextState {
+    fn new(text: String, cursor: usize, anchor: usize) -> Self {
+        Self { text, cursor, anchor }
+    }
+
+    fn selected_range(&self) -> Option<NSRange> {
+        let start = self.cursor.min(self.anchor);
+        let end = self.cursor.max(self.anchor);
+        self.byte_range_to_utf16_range(start..end)
+    }
+
+    fn marked_range(&self, length: usize) -> Option<NSRange> {
+        let location = byte_index_to_utf16_index(&self.text, self.cursor.min(self.anchor))?;
+        Some(NSRange::new(location, length))
+    }
+
+    fn utf16_range_to_byte_range(&self, range: NSRange) -> Option<Range<usize>> {
+        if range.location == NSNotFound as NSUInteger {
+            return None;
+        }
+
+        let end = range.location.checked_add(range.length)?;
+        let start = utf16_index_to_byte_index(&self.text, range.location)?;
+        let end = utf16_index_to_byte_index(&self.text, end)?;
+        Some(start..end)
+    }
+
+    fn attributed_substring_for_proposed_range(
+        &self,
+        proposed_range: NSRange,
+    ) -> Option<(Range<usize>, NSRange)> {
+        if proposed_range.location == NSNotFound as NSUInteger {
+            return None;
+        }
+
+        let text_len = self.text.encode_utf16().count();
+        let proposed_end = proposed_range.location.checked_add(proposed_range.length)?;
+
+        if proposed_range.length == 0 {
+            if proposed_range.location > text_len {
+                return None;
+            }
+
+            let actual_range = NSRange::new(proposed_range.location, 0);
+            return self.utf16_range_to_byte_range(actual_range).map(|range| (range, actual_range));
+        }
+
+        if proposed_range.location >= text_len {
+            return None;
+        }
+
+        let start = proposed_range.location;
+        let end = proposed_end.min(text_len);
+        if start >= end {
+            return None;
+        }
+
+        let actual_range = NSRange::new(start, end - start);
+        self.utf16_range_to_byte_range(actual_range).map(|range| (range, actual_range))
+    }
+
+    fn delete_surrounding_for_replacement_range(
+        &self,
+        replacement_range: NSRange,
+    ) -> Option<(usize, usize)> {
+        if replacement_range.location == NSNotFound as NSUInteger || replacement_range.length == 0 {
+            return None;
+        }
+
+        let replacement_range = self.utf16_range_to_byte_range(replacement_range)?;
+        let selection_start = self.cursor.min(self.anchor);
+        let selection_end = self.cursor.max(self.anchor);
+
+        if replacement_range.end < selection_start || replacement_range.start > selection_end {
+            return None;
+        }
+
+        Some((
+            selection_start.saturating_sub(replacement_range.start),
+            replacement_range.end.saturating_sub(selection_end),
+        ))
+    }
+
+    fn byte_range_to_utf16_range(&self, range: Range<usize>) -> Option<NSRange> {
+        let start = byte_index_to_utf16_index(&self.text, range.start)?;
+        let end = byte_index_to_utf16_index(&self.text, range.end)?;
+        Some(NSRange::new(start, end.checked_sub(start)?))
+    }
+}
+
+fn insert_text_should_commit(
+    string: &str,
+    had_marked_text: bool,
+    replacement_range: NSRange,
+) -> bool {
+    let is_control = string.chars().next().is_some_and(|c| c.is_control());
+    let has_replacement_range =
+        replacement_range.location != NSNotFound as NSUInteger && replacement_range.length != 0;
+
+    !string.is_empty()
+        && !is_control
+        && (had_marked_text || has_replacement_range || !string.is_ascii())
+}
+
+fn ime_state_after_insert_text(handling_key_down: bool) -> ImeState {
+    if handling_key_down {
+        ImeState::Committed
+    } else {
+        ImeState::Ground
+    }
+}
+
+impl From<ImeSurroundingText> for ImeTextState {
+    fn from(surrounding_text: ImeSurroundingText) -> Self {
+        let cursor = surrounding_text.cursor();
+        let anchor = surrounding_text.anchor();
+        let text = surrounding_text.into_text();
+        Self::new(text, cursor, anchor)
+    }
+}
+
+fn byte_index_to_utf16_index(text: &str, byte_index: usize) -> Option<usize> {
+    if byte_index > text.len() || !text.is_char_boundary(byte_index) {
+        return None;
+    }
+
+    Some(text[..byte_index].encode_utf16().count())
+}
+
+fn utf16_index_to_byte_index(text: &str, utf16_index: usize) -> Option<usize> {
+    let mut current_utf16_index = 0;
+
+    for (byte_index, character) in text.char_indices() {
+        if current_utf16_index == utf16_index {
+            return Some(byte_index);
+        }
+
+        current_utf16_index += character.len_utf16();
+        if current_utf16_index > utf16_index {
+            return None;
+        }
+    }
+
+    if current_utf16_index == utf16_index {
+        Some(text.len())
+    } else {
+        None
+    }
 }
 
 bitflags::bitflags! {
@@ -131,7 +290,9 @@ pub struct ViewState {
     /// to the application, even during IME
     forward_key_to_app: Cell<bool>,
 
+    handling_key_down: Cell<bool>,
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
+    ime_text_state: RefCell<Option<ImeTextState>>,
     accepts_first_mouse: bool,
 
     // Weak reference because the window keeps a strong reference to the view
@@ -252,7 +413,12 @@ declare_class!(
             trace_scope!("markedRange");
             let length = self.ivars().marked_text.borrow().length();
             if length > 0 {
-                NSRange::new(0, length)
+                self.ivars()
+                    .ime_text_state
+                    .borrow()
+                    .as_ref()
+                    .and_then(|state| state.marked_range(length))
+                    .unwrap_or_else(|| NSRange::new(0, length))
             } else {
                 // Documented to return `{NSNotFound, 0}` if there is no marked range.
                 NSRange::new(NSNotFound as NSUInteger, 0)
@@ -262,8 +428,15 @@ declare_class!(
         #[method(selectedRange)]
         fn selected_range(&self) -> NSRange {
             trace_scope!("selectedRange");
-            // Documented to return `{NSNotFound, 0}` if there is no selection.
-            NSRange::new(NSNotFound as NSUInteger, 0)
+            self.ivars()
+                .ime_text_state
+                .borrow()
+                .as_ref()
+                .and_then(ImeTextState::selected_range)
+                .unwrap_or_else(|| {
+                    // Documented to return `{NSNotFound, 0}` if there is no selection.
+                    NSRange::new(NSNotFound as NSUInteger, 0)
+                })
         }
 
         #[method(setMarkedText:selectedRange:replacementRange:)]
@@ -271,9 +444,8 @@ declare_class!(
             &self,
             string: &NSObject,
             selected_range: NSRange,
-            _replacement_range: NSRange,
+            replacement_range: NSRange,
         ) {
-            // TODO: Use _replacement_range, requires changing the event to report surrounding text.
             trace_scope!("setMarkedText:selectedRange:replacementRange:");
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
@@ -322,13 +494,15 @@ declare_class!(
                 let len = string.length();
                 let location = selected_range.location.min(len);
                 let end = selected_range.end().min(len);
-                // Convert the selected range from UTF-16 indices to UTF-8 indices.
+                // Convert the selected range from UTF-16 indices to byte indices.
                 let sub_string_a = unsafe { string.substringToIndex(location) };
                 let sub_string_b = unsafe { string.substringToIndex(end) };
                 let lowerbound_utf8 = sub_string_a.len();
                 let upperbound_utf8 = sub_string_b.len();
                 Some((lowerbound_utf8, upperbound_utf8))
             };
+
+            self.queue_delete_surrounding_for_replacement_range(replacement_range);
 
             // Send WindowEvent for updating marked text
             self.queue_event(WindowEvent::Ime(Ime::Preedit(string.to_string(), cursor_range)));
@@ -360,11 +534,26 @@ declare_class!(
         #[method_id(attributedSubstringForProposedRange:actualRange:)]
         fn attributed_substring_for_proposed_range(
             &self,
-            _range: NSRange,
-            _actual_range: *mut NSRange,
+            proposed_range: NSRange,
+            actual_range: *mut NSRange,
         ) -> Option<Retained<NSAttributedString>> {
             trace_scope!("attributedSubstringForProposedRange:actualRange:");
-            None
+            let state = self.ivars().ime_text_state.borrow();
+            if let Some((state, range, actual)) = state.as_ref().and_then(|state| {
+                state
+                    .attributed_substring_for_proposed_range(proposed_range)
+                    .map(|(range, actual)| (state, range, actual))
+            }) {
+                if !actual_range.is_null() {
+                    // SAFETY: AppKit provides this out-parameter for us to write the actual range.
+                    unsafe { *actual_range = actual };
+                }
+
+                let string = NSString::from_str(&state.text[range]);
+                Some(NSAttributedString::from_nsstring(&string))
+            } else {
+                None
+            }
         }
 
         #[method(characterIndexForPoint:)]
@@ -390,8 +579,7 @@ declare_class!(
         }
 
         #[method(insertText:replacementRange:)]
-        fn insert_text(&self, string: &NSObject, _replacement_range: NSRange) {
-            // TODO: Use _replacement_range, requires changing the event to report surrounding text.
+        fn insert_text(&self, string: &NSObject, replacement_range: NSRange) {
             trace_scope!("insertText:replacementRange:");
 
             // SAFETY: This method is guaranteed to get either a `NSString` or a `NSAttributedString`.
@@ -405,13 +593,25 @@ declare_class!(
                 unsafe { &*string }.to_string()
             };
 
-            let is_control = string.chars().next().is_some_and(|c| c.is_control());
+            let had_marked_text = unsafe { self.hasMarkedText() };
 
-            // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
-                self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            // Some IMEs, including Korean 2-Set on macOS, update composition with
+            // `insertText:replacementRange:` instead of a marked-text preedit.
+            if self.ivars().ime_allowed.get()
+                && insert_text_should_commit(&string, had_marked_text, replacement_range)
+            {
+                if self.ivars().ime_state.get() == ImeState::Disabled {
+                    *self.ivars().input_source.borrow_mut() = self.current_input_source();
+                    self.queue_event(WindowEvent::Ime(Ime::Enabled));
+                }
+                self.queue_delete_surrounding_for_replacement_range(replacement_range);
+                if had_marked_text {
+                    self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                }
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
-                self.ivars().ime_state.set(ImeState::Committed);
+                self.ivars()
+                    .ime_state
+                    .set(ime_state_after_insert_text(self.ivars().handling_key_down.get()));
             }
         }
 
@@ -465,7 +665,9 @@ declare_class!(
             // is not handled by IME and should be handled by the application)
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
+                self.ivars().handling_key_down.set(true);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
+                self.ivars().handling_key_down.set(false);
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
@@ -803,7 +1005,9 @@ impl WinitView {
             input_source: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
+            handling_key_down: Default::default(),
             marked_text: Default::default(),
+            ime_text_state: Default::default(),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),
             option_as_alt: Cell::new(option_as_alt),
@@ -888,6 +1092,7 @@ impl WinitView {
 
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+        *self.ivars().ime_text_state.borrow_mut() = None;
 
         if self.ivars().ime_state.get() != ImeState::Disabled {
             self.ivars().ime_state.set(ImeState::Disabled);
@@ -900,6 +1105,22 @@ impl WinitView {
         self.ivars().ime_size.set(size);
         let input_context = self.inputContext().expect("input context");
         input_context.invalidateCharacterCoordinates();
+    }
+
+    pub(super) fn set_ime_surrounding_text(&self, surrounding_text: ImeSurroundingText) {
+        *self.ivars().ime_text_state.borrow_mut() = Some(surrounding_text.into());
+    }
+
+    fn queue_delete_surrounding_for_replacement_range(&self, replacement_range: NSRange) {
+        let Some((before_bytes, after_bytes)) =
+            self.ivars().ime_text_state.borrow().as_ref().and_then(|state| {
+                state.delete_surrounding_for_replacement_range(replacement_range)
+            })
+        else {
+            return;
+        };
+
+        self.queue_event(WindowEvent::Ime(Ime::DeleteSurrounding { before_bytes, after_bytes }));
     }
 
     /// Reset modifiers and emit a synthetic ModifiersChanged event if deemed necessary.
@@ -1138,5 +1359,83 @@ fn replace_event(event: &NSEvent, option_as_alt: OptionAsAlt) -> Retained<NSEven
         }
     } else {
         event.copy()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_range_reports_insertion_point_from_surrounding_text() {
+        let state = ImeTextState::new(String::new(), 0, 0);
+
+        assert_eq!(state.selected_range(), Some(NSRange::new(0, 0)));
+    }
+
+    #[test]
+    fn selected_range_converts_cursor_byte_index_to_utf16() {
+        let state = ImeTextState::new("한글".to_owned(), "한".len(), "한".len());
+
+        assert_eq!(state.selected_range(), Some(NSRange::new(1, 0)));
+    }
+
+    #[test]
+    fn replacement_range_before_cursor_becomes_delete_surrounding() {
+        let state = ImeTextState::new("ㅇ".to_owned(), "ㅇ".len(), "ㅇ".len());
+
+        assert_eq!(
+            state.delete_surrounding_for_replacement_range(NSRange::new(0, 1)),
+            Some(("ㅇ".len(), 0))
+        );
+    }
+
+    #[test]
+    fn replacement_range_containing_cursor_becomes_delete_surrounding() {
+        let state = ImeTextState::new("a한b".to_owned(), "a한".len(), "a한".len());
+
+        assert_eq!(
+            state.delete_surrounding_for_replacement_range(NSRange::new(1, 2)),
+            Some(("한".len(), "b".len()))
+        );
+    }
+
+    #[test]
+    fn replacement_range_away_from_cursor_is_ignored() {
+        let state = ImeTextState::new("abc".to_owned(), 2, 2);
+
+        assert_eq!(state.delete_surrounding_for_replacement_range(NSRange::new(0, 1)), None);
+    }
+
+    #[test]
+    fn utf16_range_rejects_half_surrogate() {
+        let state = ImeTextState::new("a🙂b".to_owned(), 0, 0);
+
+        assert_eq!(state.utf16_range_to_byte_range(NSRange::new(2, 1)), None);
+    }
+
+    #[test]
+    fn insert_text_without_marked_text_commits_non_ascii_text() {
+        assert!(insert_text_should_commit("ㅇ", false, NSRange::new(NSNotFound as NSUInteger, 0)));
+    }
+
+    #[test]
+    fn insert_text_without_marked_text_does_not_commit_plain_ascii_text() {
+        assert!(!insert_text_should_commit("a", false, NSRange::new(NSNotFound as NSUInteger, 0)));
+    }
+
+    #[test]
+    fn insert_text_with_replacement_commits_plain_ascii_text() {
+        assert!(insert_text_should_commit("a", false, NSRange::new(0, 1)));
+    }
+
+    #[test]
+    fn insert_text_during_key_down_uses_committed_state() {
+        assert_eq!(ime_state_after_insert_text(true), ImeState::Committed);
+    }
+
+    #[test]
+    fn direct_insert_text_uses_ground_state() {
+        assert_eq!(ime_state_after_insert_text(false), ImeState::Ground);
     }
 }

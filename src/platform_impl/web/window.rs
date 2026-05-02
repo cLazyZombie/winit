@@ -2,8 +2,8 @@ use crate::dpi::{PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error::{ExternalError, NotSupportedError, OsError as RootOE};
 use crate::icon::Icon;
 use crate::window::{
-    Cursor, CursorGrabMode, ImePurpose, ResizeDirection, Theme, UserAttentionType,
-    WindowAttributes, WindowButtons, WindowId as RootWI, WindowLevel,
+    Cursor, CursorGrabMode, ImePurpose, ImeSurroundingText, ResizeDirection, Theme,
+    UserAttentionType, WindowAttributes, WindowButtons, WindowId as RootWI, WindowLevel,
 };
 
 use super::main_thread::{MainThreadMarker, MainThreadSafe};
@@ -326,6 +326,11 @@ impl Inner {
     #[inline]
     pub fn set_ime_cursor_area(&self, _position: Position, _size: Size) {
         // Currently a no-op as it does not seem there is good support for this on web
+    }
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, _surrounding_text: ImeSurroundingText) {
+        // Currently not implemented
     }
 
     #[inline]

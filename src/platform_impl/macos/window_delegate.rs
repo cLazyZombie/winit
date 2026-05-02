@@ -38,8 +38,8 @@ use crate::error::{ExternalError, NotSupportedError, OsError as RootOsError};
 use crate::event::{InnerSizeWriter, WindowEvent};
 use crate::platform::macos::{OptionAsAlt, WindowExtMacOS};
 use crate::window::{
-    Cursor, CursorGrabMode, Icon, ImePurpose, ResizeDirection, Theme, UserAttentionType,
-    WindowAttributes, WindowButtons, WindowLevel,
+    Cursor, CursorGrabMode, Icon, ImePurpose, ImeSurroundingText, ResizeDirection, Theme,
+    UserAttentionType, WindowAttributes, WindowButtons, WindowLevel,
 };
 
 #[derive(Clone, Debug)]
@@ -829,10 +829,13 @@ impl WindowDelegate {
 
         let suggested_size = content_size.to_physical(scale_factor);
         let new_inner_size = Arc::new(Mutex::new(suggested_size));
-        app_delegate.handle_window_event(window.id(), WindowEvent::ScaleFactorChanged {
-            scale_factor,
-            inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
-        });
+        app_delegate.handle_window_event(
+            window.id(),
+            WindowEvent::ScaleFactorChanged {
+                scale_factor,
+                inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
+            },
+        );
         let physical_size = *new_inner_size.lock().unwrap();
         drop(new_inner_size);
 
@@ -1559,6 +1562,11 @@ impl WindowDelegate {
         let size = NSSize::new(size.width, size.height);
 
         self.view().set_ime_cursor_area(logical_spot, size);
+    }
+
+    #[inline]
+    pub fn set_ime_surrounding_text(&self, surrounding_text: ImeSurroundingText) {
+        self.view().set_ime_surrounding_text(surrounding_text);
     }
 
     #[inline]

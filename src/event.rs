@@ -793,6 +793,13 @@ pub enum Ime {
     /// Right before this event winit will send empty [`Self::Preedit`] event.
     Commit(String),
 
+    /// Notifies when text around the current selection should be deleted before applying the next
+    /// IME update.
+    ///
+    /// `before_bytes` is the number of bytes to delete before the current selection start, and
+    /// `after_bytes` is the number of bytes to delete after the current selection end.
+    DeleteSurrounding { before_bytes: usize, after_bytes: usize },
+
     /// Notifies when the IME was disabled.
     ///
     /// After receiving this event you won't get any more [`Preedit`][Self::Preedit] or
