@@ -182,6 +182,19 @@ fn ime_state_after_insert_text(handling_key_down: bool) -> ImeState {
     }
 }
 
+fn ime_commit_should_forward_key_event(event: &NSEvent) -> bool {
+    let Some(text) = (unsafe { event.characters() }) else {
+        return false;
+    };
+
+    ime_commit_should_forward_key_text(&text.to_string())
+}
+
+fn ime_commit_should_forward_key_text(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().all(|ch| ch == ' ' || ch.is_ascii_digit() || ch.is_ascii_punctuation())
+}
+
 impl From<ImeSurroundingText> for ImeTextState {
     fn from(surrounding_text: ImeSurroundingText) -> Self {
         let cursor = surrounding_text.cursor();
@@ -663,6 +676,7 @@ declare_class!(
             // we must send the `KeyboardInput` event during IME if it triggered
             // `doCommandBySelector`. (doCommandBySelector means that the keyboard input
             // is not handled by IME and should be handled by the application)
+            let mut forward_committed_key = false;
             if self.ivars().ime_allowed.get() {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
                 self.ivars().handling_key_down.set(true);
@@ -671,6 +685,7 @@ declare_class!(
 
                 // If the text was committed we must treat the next keyboard event as IME related.
                 if self.ivars().ime_state.get() == ImeState::Committed {
+                    forward_committed_key = ime_commit_should_forward_key_event(&event);
                     // Remove any marked text, so normal input can continue.
                     *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
                 }
@@ -689,7 +704,7 @@ declare_class!(
                 _ => old_ime_state != self.ivars().ime_state.get(),
             };
 
-            if !had_ime_input || self.ivars().forward_key_to_app.get() {
+            if !had_ime_input || self.ivars().forward_key_to_app.get() || forward_committed_key {
                 let key_event = create_key_event(&event, true, unsafe { event.isARepeat() });
                 self.queue_event(WindowEvent::KeyboardInput {
                     device_id: DEVICE_ID,
@@ -1437,5 +1452,19 @@ mod tests {
     #[test]
     fn direct_insert_text_uses_ground_state() {
         assert_eq!(ime_state_after_insert_text(false), ImeState::Ground);
+    }
+
+    #[test]
+    fn ime_commit_forwarding_keeps_ascii_separator_text() {
+        for text in [" ", "1", ".", "?"] {
+            assert!(ime_commit_should_forward_key_text(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn ime_commit_forwarding_ignores_command_and_composing_text() {
+        for text in ["", "\r", "\t", "a", "ㅎ"] {
+            assert!(!ime_commit_should_forward_key_text(text), "{text:?}");
+        }
     }
 }
