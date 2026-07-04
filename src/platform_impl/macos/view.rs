@@ -182,6 +182,75 @@ fn ime_state_after_insert_text(handling_key_down: bool) -> ImeState {
     }
 }
 
+/// Outcome of a single `insertText:replacementRange:` call, decided purely from state that's
+/// already known before touching any AppKit object. Kept separate from `WinitView` so the
+/// decision can be unit tested without constructing `NSEvent`/`NSString` instances.
+#[derive(Debug, Eq, PartialEq)]
+enum InsertTextAction {
+    /// Commit `string` as IME output.
+    Commit,
+    /// This call is a *second* `insertText` within the same key event, arriving after an
+    /// earlier call already committed. Forward the underlying physical key event to the app
+    /// instead of treating this call's string as further IME output.
+    ForwardKeyEvent,
+    /// Nothing to do; fall through to normal `doCommandBySelector`/`keyDown` handling.
+    Ignore,
+}
+
+fn insert_text_action(
+    string: &str,
+    had_marked_text: bool,
+    replacement_range: NSRange,
+    current_state: ImeState,
+) -> InsertTextAction {
+    // `insert_text_should_commit` must be checked first, regardless of `current_state`: on
+    // Korean 2-Set, starting a new syllable also fires *two* `insertText` calls within the same
+    // key event -- one that re-affirms the previous syllable (e.g. "한" with a replacement
+    // range, which commits and sets `current_state` to `Committed`), then one with the new
+    // jamo (e.g. "ㄱ", no replacement range). That second call is legitimate further IME output,
+    // not a trailing key, and `insert_text_should_commit` already recognizes it as such via its
+    // "non-ASCII" clause. Treating every second call after `Committed` as a key to forward
+    // (rather than checking content first) breaks this, corrupting composition.
+    if insert_text_should_commit(string, had_marked_text, replacement_range) {
+        return InsertTextAction::Commit;
+    }
+
+    if current_state == ImeState::Committed {
+        // Protocol signal, not a character guess: `ImeState::Committed` is only ever set
+        // inside this same `insertText` call chain and is always reset before the next key
+        // event (see `keyDown:`), so seeing it here means an *earlier* `insertText` call
+        // already committed within the current key event. Since this call didn't qualify as a
+        // commit of its own (the check above), it's the literal trailing character of the key
+        // that triggered/followed that commit (e.g. Space confirming Korean composition, or a
+        // digit selecting a Pinyin candidate) -- forward it as a key event instead of silently
+        // dropping it. Control characters are left alone; they're not text to forward.
+        let is_control = string.chars().next().is_some_and(|c| c.is_control());
+        return if is_control {
+            InsertTextAction::Ignore
+        } else {
+            InsertTextAction::ForwardKeyEvent
+        };
+    }
+
+    InsertTextAction::Ignore
+}
+
+/// Pure companion to `doCommandBySelector:`'s preedit-state transition, split out so it can be
+/// unit tested without an `NSEvent`. Forwarding the key event to the app (`forward_key_to_app`)
+/// is unconditional and handled by the caller; this only decides whether leaving a selector
+/// (e.g. Escape or an arrow key) during preedit should drop back to the ground state so the
+/// matching key-up is reported.
+fn ime_state_after_do_command_by_selector(
+    has_marked_text: bool,
+    current_state: ImeState,
+) -> ImeState {
+    if has_marked_text && current_state == ImeState::Preedit {
+        ImeState::Ground
+    } else {
+        current_state
+    }
+}
+
 impl From<ImeSurroundingText> for ImeTextState {
     fn from(surrounding_text: ImeSurroundingText) -> Self {
         let cursor = surrounding_text.cursor();
@@ -593,25 +662,43 @@ declare_class!(
                 unsafe { &*string }.to_string()
             };
 
+            if !self.ivars().ime_allowed.get() {
+                return;
+            }
+
             let had_marked_text = unsafe { self.hasMarkedText() };
 
             // Some IMEs, including Korean 2-Set on macOS, update composition with
             // `insertText:replacementRange:` instead of a marked-text preedit.
-            if self.ivars().ime_allowed.get()
-                && insert_text_should_commit(&string, had_marked_text, replacement_range)
-            {
-                if self.ivars().ime_state.get() == ImeState::Disabled {
-                    *self.ivars().input_source.borrow_mut() = self.current_input_source();
-                    self.queue_event(WindowEvent::Ime(Ime::Enabled));
-                }
-                self.queue_delete_surrounding_for_replacement_range(replacement_range);
-                if had_marked_text {
-                    self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
-                }
-                self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
-                self.ivars()
-                    .ime_state
-                    .set(ime_state_after_insert_text(self.ivars().handling_key_down.get()));
+            match insert_text_action(
+                &string,
+                had_marked_text,
+                replacement_range,
+                self.ivars().ime_state.get(),
+            ) {
+                InsertTextAction::Commit => {
+                    if self.ivars().ime_state.get() == ImeState::Disabled {
+                        *self.ivars().input_source.borrow_mut() = self.current_input_source();
+                        self.queue_event(WindowEvent::Ime(Ime::Enabled));
+                    }
+                    self.queue_delete_surrounding_for_replacement_range(replacement_range);
+                    if had_marked_text {
+                        self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+                    }
+                    self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
+                    // Clear marked text immediately, as required by the NSTextInputClient
+                    // protocol. Otherwise a subsequent `insertText` call within the same
+                    // `interpretKeyEvents` invocation (e.g. a trailing confirm key) would still
+                    // see stale composition state via `hasMarkedText`.
+                    *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+                    self.ivars()
+                        .ime_state
+                        .set(ime_state_after_insert_text(self.ivars().handling_key_down.get()));
+                },
+                InsertTextAction::ForwardKeyEvent => {
+                    self.ivars().forward_key_to_app.set(true);
+                },
+                InsertTextAction::Ignore => {},
             }
         }
 
@@ -620,20 +707,16 @@ declare_class!(
         #[method(doCommandBySelector:)]
         fn do_command_by_selector(&self, _command: Sel) {
             trace_scope!("doCommandBySelector:");
-            // We shouldn't forward any character from just committed text, since we'll end up sending
-            // it twice with some IMEs like Korean one. We'll also always send `Enter` in that case,
-            // which is not desired given it was used to confirm IME input.
-            if self.ivars().ime_state.get() == ImeState::Committed {
-                return;
-            }
-
+            // No early return for `ImeState::Committed` here: `insertText` already clears
+            // `marked_text` the moment it commits, so a selector fired right after a commit
+            // (e.g. `insertNewline:` for the Enter that confirmed composition) can no longer
+            // observe stale preedit state. Forwarding it is correct, not a double send.
             self.ivars().forward_key_to_app.set(true);
 
-            if unsafe { self.hasMarkedText() } && self.ivars().ime_state.get() == ImeState::Preedit
-            {
-                // Leave preedit so that we also report the key-up for this key.
-                self.ivars().ime_state.set(ImeState::Ground);
-            }
+            self.ivars().ime_state.set(ime_state_after_do_command_by_selector(
+                unsafe { self.hasMarkedText() },
+                self.ivars().ime_state.get(),
+            ));
         }
     }
 
@@ -668,12 +751,6 @@ declare_class!(
                 self.ivars().handling_key_down.set(true);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
                 self.ivars().handling_key_down.set(false);
-
-                // If the text was committed we must treat the next keyboard event as IME related.
-                if self.ivars().ime_state.get() == ImeState::Committed {
-                    // Remove any marked text, so normal input can continue.
-                    *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
-                }
             }
 
             self.update_modifiers(&event, false);
@@ -1437,5 +1514,105 @@ mod tests {
     #[test]
     fn direct_insert_text_uses_ground_state() {
         assert_eq!(ime_state_after_insert_text(false), ImeState::Ground);
+    }
+
+    // (a) Korean composition confirmed by Space: `insertText` fires twice within the same
+    // key event -- once with the composed syllable (commit), once with the trailing space.
+    #[test]
+    fn insert_text_action_commits_composed_syllable_then_forwards_trailing_space() {
+        // Values match what Korean 2-Set actually sends (verified against a real device with
+        // the `ime_textbox` example): the syllable is re-affirmed via a replacement range
+        // rather than a marked-text preedit.
+        let first = insert_text_action("한", false, NSRange::new(0, 1), ImeState::Ground);
+        assert_eq!(first, InsertTextAction::Commit);
+
+        // The view sets `ime_state` to `Committed` right after the first call commits
+        // (see `insert_text`), so the second call observes that as `current_state`.
+        let second = insert_text_action(
+            " ",
+            false,
+            NSRange::new(NSNotFound as NSUInteger, 0),
+            ImeState::Committed,
+        );
+        assert_eq!(second, InsertTextAction::ForwardKeyEvent);
+    }
+
+    // Regression test for a real-device finding: starting a *new* syllable also fires two
+    // `insertText` calls in one key event (the previous syllable is re-affirmed, then the new
+    // jamo arrives), so seeing `Committed` on the second call must not always mean "forward the
+    // key" -- non-ASCII IME output has to keep committing normally.
+    #[test]
+    fn insert_text_action_keeps_committing_non_ascii_jamo_after_a_same_event_commit() {
+        let action = insert_text_action(
+            "ㄱ",
+            false,
+            NSRange::new(NSNotFound as NSUInteger, 0),
+            ImeState::Committed,
+        );
+        assert_eq!(action, InsertTextAction::Commit);
+    }
+
+    // (b) Pinyin candidate selection by digit: a single `insertText` call replaces the marked
+    // text with the chosen candidate; there is no second call to misinterpret as a repeat.
+    #[test]
+    fn insert_text_action_commits_pinyin_candidate_in_a_single_call() {
+        let action = insert_text_action("你好", true, NSRange::new(0, 6), ImeState::Preedit);
+        assert_eq!(action, InsertTextAction::Commit);
+    }
+
+    // (c) Plain ASCII typing with no active composition must not be treated as IME output, so
+    // `keyDown` falls back to forwarding the physical key event normally.
+    #[test]
+    fn insert_text_action_ignores_plain_ascii_typing() {
+        let action = insert_text_action(
+            "a",
+            false,
+            NSRange::new(NSNotFound as NSUInteger, 0),
+            ImeState::Ground,
+        );
+        assert_eq!(action, InsertTextAction::Ignore);
+    }
+
+    // Guards against re-introducing the physical-key-character heuristic this replaces: once
+    // `Committed`, a control character (e.g. a stray "\r") must still be ignored, not forwarded
+    // as if it were printable text.
+    #[test]
+    fn insert_text_action_ignores_control_character_after_commit() {
+        let action = insert_text_action(
+            "\r",
+            false,
+            NSRange::new(NSNotFound as NSUInteger, 0),
+            ImeState::Committed,
+        );
+        assert_eq!(action, InsertTextAction::Ignore);
+    }
+
+    // (d) Escape/arrow keys while composing go through `doCommandBySelector`, not `insertText`.
+    // Leaving preedit must drop the state back to `Ground` so the key-up is still reported.
+    #[test]
+    fn do_command_by_selector_leaves_preedit_when_marked_text_present() {
+        assert_eq!(
+            ime_state_after_do_command_by_selector(true, ImeState::Preedit),
+            ImeState::Ground
+        );
+    }
+
+    #[test]
+    fn do_command_by_selector_keeps_ground_state_without_marked_text() {
+        assert_eq!(
+            ime_state_after_do_command_by_selector(false, ImeState::Ground),
+            ImeState::Ground
+        );
+    }
+
+    // Regression guard for the removed early-return in `do_command_by_selector`: a selector
+    // firing right after a commit (e.g. Enter's `insertNewline:`) must be forwarded rather than
+    // swallowed, and the state-transition helper must not special-case `Committed`.
+    #[test]
+    fn do_command_by_selector_does_not_special_case_committed_state() {
+        assert_eq!(
+            ime_state_after_do_command_by_selector(false, ImeState::Committed),
+            ImeState::Committed
+        );
     }
 }
