@@ -32,7 +32,7 @@ use super::monitor::{self, flip_window_screen_coordinates, get_display_id};
 use super::observer::RunLoop;
 use super::view::WinitView;
 use super::window::WinitWindow;
-use super::{ffi, Fullscreen, MonitorHandle, OsError, WindowId};
+use super::{ffi, metal_surface, Fullscreen, MonitorHandle, OsError, WindowId};
 use crate::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use crate::error::{ExternalError, NotSupportedError, OsError as RootOsError};
 use crate::event::{InnerSizeWriter, WindowEvent};
@@ -829,13 +829,10 @@ impl WindowDelegate {
 
         let suggested_size = content_size.to_physical(scale_factor);
         let new_inner_size = Arc::new(Mutex::new(suggested_size));
-        app_delegate.handle_window_event(
-            window.id(),
-            WindowEvent::ScaleFactorChanged {
-                scale_factor,
-                inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
-            },
-        );
+        app_delegate.handle_window_event(window.id(), WindowEvent::ScaleFactorChanged {
+            scale_factor,
+            inner_size_writer: InnerSizeWriter::new(Arc::downgrade(&new_inner_size)),
+        });
         let physical_size = *new_inner_size.lock().unwrap();
         drop(new_inner_size);
 
@@ -1866,6 +1863,12 @@ impl WindowExtMacOS for WindowDelegate {
 
     fn option_as_alt(&self) -> OptionAsAlt {
         self.view().option_as_alt()
+    }
+
+    fn set_metal_surface_contents_top_left(
+        &self,
+    ) -> crate::platform::macos::MetalSurfaceContentsGravityStatus {
+        metal_surface::set_contents_top_left(&self.view(), MainThreadMarker::from(self))
     }
 
     fn set_borderless_game(&self, borderless_game: bool) {

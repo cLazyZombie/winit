@@ -3,8 +3,7 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::ImeSurroundingText;
-use winit::window::{Window, WindowId};
+use winit::window::{ImeSurroundingText, Window, WindowId};
 
 #[path = "util/fill.rs"]
 mod fill;

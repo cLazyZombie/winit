@@ -43,6 +43,7 @@ changelog entry.
 ### Added
 
 - Add `Window::set_ime_surrounding_text` and `Ime::DeleteSurrounding`, implemented on macOS.
+- On macOS, add `WindowExtMacOS::set_metal_surface_contents_top_left`.
 
 ### Fixed
 

@@ -175,7 +175,12 @@ features = [
     "NSWindow",
     "NSWindowScripting",
     "NSWindowTabGroup",
+    "objc2-quartz-core",
 ]
+
+[target.'cfg(target_os = "macos")'.dependencies.objc2-quartz-core]
+version = "0.2.2"
+features = ["CALayer", "CAMetalLayer"]
 
 [target.'cfg(target_os = "ios")'.dependencies.objc2-foundation]
 version = "0.2.2"

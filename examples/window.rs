@@ -441,7 +441,8 @@ impl ApplicationHandler<UserEvent> for Application {
                 },
                 Ime::DeleteSurrounding { before_bytes, after_bytes } => {
                     info!(
-                        "Delete surrounding text: before_bytes={before_bytes}, after_bytes={after_bytes}"
+                        "Delete surrounding text: before_bytes={before_bytes}, \
+                         after_bytes={after_bytes}"
                     );
                 },
                 Ime::Disabled => info!("IME disabled for Window={window_id:?}"),

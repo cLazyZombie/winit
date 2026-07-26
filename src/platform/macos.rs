@@ -91,6 +91,19 @@ use crate::event_loop::{ActiveEventLoop, EventLoopBuilder};
 use crate::monitor::MonitorHandle;
 use crate::window::{Window, WindowAttributes};
 
+/// Result of changing the contents gravity of a window's Metal surface layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+#[must_use]
+pub enum MetalSurfaceContentsGravityStatus {
+    /// At least one Metal surface layer was found and updated.
+    Applied,
+    /// The window does not currently have a Metal surface layer.
+    NotFound,
+    /// A layer did not retain the requested contents gravity.
+    ApplyFailed,
+}
+
 /// Additional methods on [`Window`] that are specific to MacOS.
 pub trait WindowExtMacOS {
     /// Returns whether or not the window is in simple fullscreen mode.
@@ -162,6 +175,27 @@ pub trait WindowExtMacOS {
 
     /// Getter for the [`WindowExtMacOS::set_option_as_alt`].
     fn option_as_alt(&self) -> OptionAsAlt;
+
+    /// Pins the Metal surface contents to the screen's upper-left corner.
+    ///
+    /// Call this after each time the rendering backend creates or recreates its
+    /// surface. This prevents the last presented drawable from stretching while
+    /// the layer grows before the backend updates its drawable size. If the
+    /// view's root layer is a Metal layer, it is updated and its children are
+    /// left unchanged. Otherwise, every direct Metal sublayer is updated while
+    /// nested layers are left unchanged. A backend may create one direct layer
+    /// per enabled graphics API.
+    ///
+    /// This synchronously dispatches to AppKit's main thread. Calling it from a
+    /// worker while the main thread waits for that worker will deadlock.
+    ///
+    /// Returns whether the gravity was applied, no Metal layer exists, or a
+    /// layer rejected the requested value. If one layer rejects the value, the
+    /// method still attempts to update every remaining direct Metal layer before
+    /// returning [`MetalSurfaceContentsGravityStatus::ApplyFailed`].
+    fn set_metal_surface_contents_top_left(&self) -> MetalSurfaceContentsGravityStatus {
+        MetalSurfaceContentsGravityStatus::NotFound
+    }
 
     /// Disable the Menu Bar and Dock in Simple or Borderless Fullscreen mode. Useful for games.
     /// The effect is applied when [`WindowExtMacOS::set_simple_fullscreen`] or
@@ -241,6 +275,11 @@ impl WindowExtMacOS for Window {
     #[inline]
     fn option_as_alt(&self) -> OptionAsAlt {
         self.window.maybe_wait_on_main(|w| w.option_as_alt())
+    }
+
+    #[inline]
+    fn set_metal_surface_contents_top_left(&self) -> MetalSurfaceContentsGravityStatus {
+        self.window.maybe_wait_on_main(|w| w.set_metal_surface_contents_top_left())
     }
 
     #[inline]

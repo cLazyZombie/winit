@@ -1263,8 +1263,9 @@ impl Window {
     /// Some input methods use this context to replace already inserted text with a newly composed
     /// form. On macOS, Korean 2-Set uses this path when combining jamo into Hangul syllables.
     ///
-    /// When winit emits [`Ime::DeleteSurrounding`], delete the requested bytes around the current
-    /// selection before applying the following [`Ime::Commit`].
+    /// When winit emits [`Ime::DeleteSurrounding`][crate::event::Ime::DeleteSurrounding], delete
+    /// the requested bytes around the current selection before applying the following
+    /// [`Ime::Commit`][crate::event::Ime::Commit].
     ///
     /// ## Platform-specific
     ///
