@@ -61,6 +61,9 @@ pub trait ApplicationHandler<T: 'static = ()> {
     ///
     /// ## iOS
     ///
+    /// `UIApplicationSceneManifest`가 있으면 첫 scene 활성화 알림에서 `Resumed`를 보낸다.
+    /// manifest가 없는 앱은 다음 기존 경로를 사용한다.
+    ///
     /// On iOS, the `Resumed` event is emitted in response to an [`applicationDidBecomeActive`]
     /// callback which means the application is "active" (according to the
     /// [iOS application lifecycle]).
@@ -162,6 +165,9 @@ pub trait ApplicationHandler<T: 'static = ()> {
     /// [`wgpu::Surface`]: https://docs.rs/wgpu/latest/wgpu/struct.Surface.html
     ///
     /// ## iOS
+    ///
+    /// `UIApplicationSceneManifest`가 있으면 마지막 활성 scene의 비활성화나 연결 해제에서
+    /// `Suspended`를 보낸다. manifest가 없는 앱은 다음 기존 경로를 사용한다.
     ///
     /// On iOS, the `Suspended` event is currently emitted in response to an
     /// [`applicationWillResignActive`] callback which means that the application is

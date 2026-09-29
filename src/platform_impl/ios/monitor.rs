@@ -1,12 +1,13 @@
 #![allow(clippy::unnecessary_cast)]
+use dispatch2::MainThreadBound;
+use objc2::MainThreadMarker;
 
 use std::collections::{BTreeSet, VecDeque};
 use std::{fmt, hash, ptr};
 
-use objc2::mutability::IsRetainable;
 use objc2::rc::Retained;
 use objc2::Message;
-use objc2_foundation::{run_on_main, MainThreadBound, MainThreadMarker, NSInteger};
+use objc2_foundation::NSInteger;
 use objc2_ui_kit::{UIScreen, UIScreenMode};
 
 use crate::dpi::{PhysicalPosition, PhysicalSize};
@@ -17,13 +18,15 @@ use crate::platform_impl::platform::app_state;
 #[derive(Debug)]
 struct MainThreadBoundDelegateImpls<T>(MainThreadBound<Retained<T>>);
 
-impl<T: IsRetainable + Message> Clone for MainThreadBoundDelegateImpls<T> {
+impl<T: Message> Clone for MainThreadBoundDelegateImpls<T> {
     fn clone(&self) -> Self {
-        Self(run_on_main(|mtm| MainThreadBound::new(Retained::clone(self.0.get(mtm)), mtm)))
+        Self(dispatch2::run_on_main(|mtm| {
+            MainThreadBound::new(Retained::clone(self.0.get(mtm)), mtm)
+        }))
     }
 }
 
-impl<T: IsRetainable + Message> hash::Hash for MainThreadBoundDelegateImpls<T> {
+impl<T: Message> hash::Hash for MainThreadBoundDelegateImpls<T> {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         // SAFETY: Marker only used to get the pointer
         let mtm = unsafe { MainThreadMarker::new_unchecked() };
@@ -31,7 +34,7 @@ impl<T: IsRetainable + Message> hash::Hash for MainThreadBoundDelegateImpls<T> {
     }
 }
 
-impl<T: IsRetainable + Message> PartialEq for MainThreadBoundDelegateImpls<T> {
+impl<T: Message> PartialEq for MainThreadBoundDelegateImpls<T> {
     fn eq(&self, other: &Self) -> bool {
         // SAFETY: Marker only used to get the pointer
         let mtm = unsafe { MainThreadMarker::new_unchecked() };
@@ -39,7 +42,7 @@ impl<T: IsRetainable + Message> PartialEq for MainThreadBoundDelegateImpls<T> {
     }
 }
 
-impl<T: IsRetainable + Message> Eq for MainThreadBoundDelegateImpls<T> {}
+impl<T: Message> Eq for MainThreadBoundDelegateImpls<T> {}
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct VideoModeHandle {
@@ -94,7 +97,7 @@ pub struct MonitorHandle {
 
 impl Clone for MonitorHandle {
     fn clone(&self) -> Self {
-        run_on_main(|mtm| Self {
+        dispatch2::run_on_main(|mtm| Self {
             ui_screen: MainThreadBound::new(self.ui_screen.get(mtm).clone(), mtm),
         })
     }
@@ -156,7 +159,7 @@ impl MonitorHandle {
     }
 
     pub fn name(&self) -> Option<String> {
-        run_on_main(|mtm| {
+        dispatch2::run_on_main(|mtm| {
             #[allow(deprecated)]
             let main = UIScreen::mainScreen(mtm);
             if *self.ui_screen(mtm) == main {
@@ -167,7 +170,7 @@ impl MonitorHandle {
                 #[allow(deprecated)]
                 UIScreen::screens(mtm)
                     .iter()
-                    .position(|rhs| rhs == &**self.ui_screen(mtm))
+                    .position(|rhs| *rhs == **self.ui_screen(mtm))
                     .map(|idx| idx.to_string())
             }
         })
@@ -192,7 +195,7 @@ impl MonitorHandle {
     }
 
     pub fn video_modes(&self) -> impl Iterator<Item = VideoModeHandle> {
-        run_on_main(|mtm| {
+        dispatch2::run_on_main(|mtm| {
             let ui_screen = self.ui_screen(mtm);
             // Use Ord impl of RootVideoModeHandle
 
@@ -213,7 +216,7 @@ impl MonitorHandle {
     }
 
     pub fn preferred_video_mode(&self) -> VideoModeHandle {
-        run_on_main(|mtm| {
+        dispatch2::run_on_main(|mtm| {
             VideoModeHandle::new(
                 self.ui_screen(mtm).clone(),
                 self.ui_screen(mtm).preferredMode().unwrap(),

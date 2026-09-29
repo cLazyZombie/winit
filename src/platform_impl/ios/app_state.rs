@@ -1,4 +1,6 @@
 #![deny(unused_results)]
+use objc2::MainThreadMarker;
+use objc2_core_foundation::{CGRect, CGSize};
 
 use std::cell::{RefCell, RefMut};
 use std::collections::HashSet;
@@ -16,11 +18,8 @@ use core_foundation::runloop::{
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{msg_send, sel};
-use objc2_foundation::{
-    CGRect, CGSize, MainThreadMarker, NSInteger, NSObjectProtocol, NSOperatingSystemVersion,
-    NSProcessInfo,
-};
-use objc2_ui_kit::{UIApplication, UICoordinateSpace, UIView, UIWindow};
+use objc2_foundation::{NSInteger, NSObjectProtocol, NSOperatingSystemVersion, NSProcessInfo};
+use objc2_ui_kit::{UIApplication, UICoordinateSpace, UIView};
 
 use super::window::WinitUIWindow;
 use crate::dpi::PhysicalSize;
@@ -671,13 +670,7 @@ pub(crate) fn send_occluded_event_for_all_windows(application: &UIApplication, o
     let mut events = Vec::new();
     #[allow(deprecated)]
     for window in application.windows().iter() {
-        if window.is_kind_of::<WinitUIWindow>() {
-            // SAFETY: We just checked that the window is a `winit` window
-            let window = unsafe {
-                let ptr: *const UIWindow = window;
-                let ptr: *const WinitUIWindow = ptr.cast();
-                &*ptr
-            };
+        if let Some(window) = window.downcast_ref::<WinitUIWindow>() {
             events.push(EventWrapper::StaticEvent(Event::WindowEvent {
                 window_id: RootWindowId(window.id()),
                 event: WindowEvent::Occluded(occluded),
@@ -727,13 +720,7 @@ pub(crate) fn terminated(application: &UIApplication) {
     let mut events = Vec::new();
     #[allow(deprecated)]
     for window in application.windows().iter() {
-        if window.is_kind_of::<WinitUIWindow>() {
-            // SAFETY: We just checked that the window is a `winit` window
-            let window = unsafe {
-                let ptr: *const UIWindow = window;
-                let ptr: *const WinitUIWindow = ptr.cast();
-                &*ptr
-            };
+        if let Some(window) = window.downcast_ref::<WinitUIWindow>() {
             events.push(EventWrapper::StaticEvent(Event::WindowEvent {
                 window_id: RootWindowId(window.id()),
                 event: WindowEvent::Destroyed,

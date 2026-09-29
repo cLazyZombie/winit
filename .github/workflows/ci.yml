@@ -60,10 +60,19 @@ jobs:
           - { name: 'iOS Aarch64',        target: aarch64-apple-ios,        os: macos-latest,    }
           - { name: 'web',                target: wasm32-unknown-unknown,   os: ubuntu-latest,   }
         exclude:
+          # iOS objc2 0.6만 Rust 1.71이 필요하며 데스크톱 MSRV는 유지한다.
+          - toolchain: '1.70.0'
+            platform: { name: 'iOS x86_64', target: x86_64-apple-ios, os: macos-latest }
+          - toolchain: '1.70.0'
+            platform: { name: 'iOS Aarch64', target: aarch64-apple-ios, os: macos-latest }
           # Android is tested on stable-3
           - toolchain: '1.70.0'
             platform: { name: 'Android', target: aarch64-linux-android, os: ubuntu-latest, options: '--package=winit --features=android-native-activity', cmd: 'apk --' }
         include:
+          - toolchain: '1.71.0'
+            platform: { name: 'iOS x86_64', target: x86_64-apple-ios, os: macos-latest }
+          - toolchain: '1.71.0'
+            platform: { name: 'iOS Aarch64', target: aarch64-apple-ios, os: macos-latest }
           - toolchain: '1.70.0'
             platform: { name: 'Android', target: aarch64-linux-android, os: ubuntu-latest, options: '--package=winit --features=android-native-activity', cmd: 'apk --' }
           - toolchain: 'nightly'
@@ -159,13 +168,13 @@ jobs:
     - name: Test dpi crate
       if: >
         contains(matrix.platform.name, 'Linux 64bit') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.70.0' && matrix.toolchain != '1.71.0'
       run: cargo test -p dpi
 
     - name: Build tests
       if: >
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.70.0' && matrix.toolchain != '1.71.0'
       run: cargo $CMD test --no-run $OPTIONS
 
     - name: Run tests
@@ -174,7 +183,7 @@ jobs:
         !contains(matrix.platform.target, 'ios') &&
         !contains(matrix.platform.target, 'wasm32') &&
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.70.0' && matrix.toolchain != '1.71.0'
       run: cargo $CMD test $OPTIONS
 
     - name: Lint with clippy
@@ -184,7 +193,7 @@ jobs:
     - name: Build tests with serde enabled
       if: >
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.70.0' && matrix.toolchain != '1.71.0'
       run: cargo $CMD test --no-run $OPTIONS --features serde
 
     - name: Run tests with serde enabled
@@ -193,7 +202,7 @@ jobs:
         !contains(matrix.platform.target, 'ios') &&
         !contains(matrix.platform.target, 'wasm32') &&
         !contains(matrix.platform.target, 'redox') &&
-        matrix.toolchain != '1.70.0'
+        matrix.toolchain != '1.70.0' && matrix.toolchain != '1.71.0'
       run: cargo $CMD test $OPTIONS --features serde
 
     - name: Check docs.rs documentation
